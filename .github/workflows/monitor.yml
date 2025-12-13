@@ -2,8 +2,8 @@ name: Monitor inPZU BTC Daily
 
 on:
   schedule:
-    # Uruchom codziennie o 07:00 UTC (czyli 8:00 CET zimą)
-    - cron: '0 7 * * *' 
+    # Uruchom codziennie o 21:30 UTC (czyli 22:30 CET zimą)
+    - cron: '30 21 * * *' 
   workflow_dispatch: # pozwala uruchamiać ręcznie
 
 jobs:
