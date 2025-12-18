@@ -1,11 +1,12 @@
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta, date
+from datetime import datetime, date
 import time
 import os
 
 # ---- PARAMETRY ----
+
 ROZNICA_THRESHOLD = 3000.0
 CACHE_DIR = "cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -40,69 +41,48 @@ def fetch_btc_spot():
     return price
 
 
-# ---- NAV inPZU Bitcoin (ostatni dostępny) ----
+# ---- NAV inPZU Bitcoin (ostatni dostępny) ze Stooq CSV ----
+from io import StringIO
+
 def fetch_inpzu_nav():
-    url = "https://www.biznesradar.pl/notowania-historyczne/PZUSGW.TFI"
-    end = date.today()
-    start = end - timedelta(days=10)  # ostatnie 10 dni dla pewności
-
+    url = "https://stooq.pl/q/d/l/?s=1150.n&i=d"
     r = http_get_with_retry(url)
-    soup = BeautifulSoup(r.text, "html.parser")
+    r.encoding = "utf-8"
 
-    rows = []
-    tables = soup.find_all("table")
-    for t in tables:
-        for tr in t.find_all("tr"):
-            cols = [
-                td.get_text(strip=True).replace("\xa0", " ")
-                for td in tr.find_all(["td", "th"])
-            ]
-            if len(cols) < 2:
-                continue
-            date_str = None
-            val_str = None
-            for c in cols:
-                if "." in c and any(ch.isdigit() for ch in c) and len(c) >= 8:
-                    date_str = c
-                cleaned = (
-                    c.replace(" ", "")
-                     .replace("PLN", "")
-                     .replace("zł", "")
-                     .replace("%", "")
-                     .replace(",", ".")
-                )
-                if cleaned.replace(".", "").isdigit():
-                    val_str = cleaned
-            if date_str and val_str:
-                try:
-                    d = pd.to_datetime(date_str, dayfirst=True).date()
-                    v = float(val_str)
-                    if start <= d <= end:
-                        rows.append((d, v))
-                except Exception:
-                    continue
+    df = pd.read_csv(StringIO(r.text))
 
-    if not rows:
-        print("Brak danych NAV inPZU z BiznesRadar.")
+    print("Kolumny z CSV Stooq:", list(df.columns))  # zostaw na razie do debugowania
+
+    # spróbuj znaleźć kolumnę z datą i zamknięciem „po nazwie”
+    cols_lower = {c.lower(): c for c in df.columns}
+
+    date_col = cols_lower.get("date") or cols_lower.get("data")
+    close_col = cols_lower.get("close") or cols_lower.get("zamkniecie") or cols_lower.get("kurs")
+
+    if date_col is None or close_col is None:
+        print("Nie rozpoznano kolumn daty / kursu w CSV Stooq.")
         return None, None
 
-    df = (
-        pd.DataFrame(rows, columns=["date", "nav_pln"])
-        .drop_duplicates(subset=["date"])
-        .sort_values("date")
-    )
+    if df.empty:
+        print("Brak danych NAV z Stooq (CSV).")
+        return None, None
 
-    # bierzemy OSTATNI dostępny NAV
-    latest_nav = df.iloc[-1]
-    return latest_nav["nav_pln"], latest_nav["date"]
+    df[date_col] = pd.to_datetime(df[date_col]).dt.date
+    df = df.sort_values(date_col)
+
+    latest = df.iloc[-1]
+    nav_date = latest[date_col]
+    nav_pln = float(latest[close_col])
+
+    return nav_pln, nav_date
 
 
 # ---- Bloomberg Bitcoin Index z FT (scraping) ----
 def fetch_bloomberg_index_ft(timeout=5):
     """
     PRÓBA pobrania z FT:
-      - bieżącej wartości indeksu BITCOIN:IOM (Price USD),
-      - dziennej zmiany: wartość / %.
+    - bieżącej wartości indeksu BITCOIN:IOM (Price USD),
+    - dziennej zmiany: wartość / %.
     Zwraca (price, change_abs, change_pct) albo (None, None, None) przy błędzie.
     """
     url = "https://markets.ft.com/data/indices/tearsheet/summary?s=BITCOIN:IOM"
@@ -151,7 +131,12 @@ def fetch_bloomberg_index_ft(timeout=5):
                     parts = [p.strip() for p in txt.split("/")]
                     if len(parts) == 2:
                         abs_str = parts[0].replace(",", "").replace(" ", "")
-                        pct_str = parts[1].replace("%", "").replace(",", "").replace(" ", "")
+                        pct_str = (
+                            parts[1]
+                            .replace("%", "")
+                            .replace(",", "")
+                            .replace(" ", "")
+                        )
                         change_abs = float(abs_str)
                         change_pct = float(pct_str)
     except Exception as e:
@@ -185,7 +170,6 @@ def check_and_notify():
 
     # próba zczytania Bloomberga z FT
     ft_price, ft_change_abs, ft_change_pct = fetch_bloomberg_index_ft()
-
     if ft_price is not None:
         print(f"FT BITCOIN:IOM Price (USD): {ft_price:.2f}")
     if ft_change_abs is not None:
@@ -214,14 +198,13 @@ def check_and_notify():
     print(f"Zapisano do {out_path}")
 
     # ALERT jeśli różnica >= 3000
-
     if abs(roznica) >= ROZNICA_THRESHOLD:
-        send_ntfy_alert(nav_date, nav_pln, btc_now, roznica,
-                        ft_price, ft_change_abs, ft_change_pct)
-
+        send_ntfy_alert(
+            nav_date, nav_pln, btc_now, roznica,
+            ft_price, ft_change_abs, ft_change_pct
+        )
     else:
         print(f"Różnica {roznica:.2f} < {ROZNICA_THRESHOLD} – brak alertu.")
-
 
 
 # ---- POWIADOMIENIE ntfy.sh ----
@@ -236,10 +219,13 @@ def send_ntfy_alert(nav_date, nav_pln, btc_now, roznica,
     if ft_price is not None:
         ft_lines += f"\nFT BITCOIN:IOM Price (USD): {ft_price:.2f}"
     if ft_change_abs is not None:
-        ft_lines += f"\nFT BITCOIN:IOM Today's Change: {ft_change_abs:.2f} USD / {ft_change_pct:.2f}%"
+        ft_lines += (
+            f"\nFT BITCOIN:IOM Today's Change: "
+            f"{ft_change_abs:.2f} USD / {ft_change_pct:.2f}%"
+        )
 
     message = (
-        f"🚨 ALERT inPZU vs BTC 🚨\n\n"
+        "🚨 ALERT inPZU vs BTC 🚨\n\n"
         f"NAV inPZU ({nav_date}): {nav_pln:.4f} PLN\n"
         f"BTC teraz: {btc_now:.4f} USD\n"
         f"RÓŻNICA: {roznica:.4f}"
@@ -253,7 +239,6 @@ def send_ntfy_alert(nav_date, nav_pln, btc_now, roznica,
         print(f"✅ Powiadomienie ntfy wysłane na kanał: {topic}")
     except Exception as e:
         print(f"❌ Błąd ntfy: {e}")
-
 
 
 def main():
