@@ -1,7 +1,8 @@
+#!/usr/bin/env python3
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
-from datetime import datetime, date
+from datetime import datetime
 import time
 import os
 from io import StringIO
@@ -10,7 +11,8 @@ ROZNICA_THRESHOLD = 3000.0
 CACHE_DIR = "cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-NTFY_TOPIC = os.getenv("NTFY_TOPIC", "inpzu-alert-wojtas")
+NTFY_TOPIC = "inpzu-alert-wojtas"
+NTFY_URL = f"https://ntfy.sh/{NTFY_TOPIC}"
 
 
 def http_get_with_retry(url, max_retries=3, timeout=20, sleep_sec=2, headers=None):
@@ -102,8 +104,10 @@ def fetch_bloomberg_index_ft(timeout=5):
         return None, None, None
 
     soup = BeautifulSoup(r.text, "html.parser")
-
     price_value = None
+    change_abs = None
+    change_pct = None
+
     try:
         label_span = soup.find("span", string=lambda s: s and "Price (USD)" in s)
         if label_span:
@@ -115,10 +119,7 @@ def fetch_bloomberg_index_ft(timeout=5):
                     price_value = float(txt.replace(",", "").replace(" ", ""))
     except Exception as e:
         print(f"[FT] Problem z parsowaniem Price (USD): {e}")
-        price_value = None
 
-    change_abs = None
-    change_pct = None
     try:
         label_span = soup.find("span", class_="mod-ui-data-list__label", string=lambda s: s and "Today's Change" in s)
         if label_span:
@@ -135,8 +136,6 @@ def fetch_bloomberg_index_ft(timeout=5):
                         change_pct = float(pct_str)
     except Exception as e:
         print(f"[FT] Problem z parsowaniem Today's Change: {e}")
-        change_abs = None
-        change_pct = None
 
     if price_value is None and change_abs is None:
         print("[FT] Nie udało się wiarygodnie odczytać danych BITCOIN:IOM.")
