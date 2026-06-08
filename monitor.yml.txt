@@ -1,28 +1,26 @@
-name: Monitor inPZU BTC Daily
+name: Monitor BTC
 
 on:
+  workflow_dispatch:
   schedule:
-    # Uruchom codziennie o 21:30 UTC (czyli 22:30 CET zimą)
-    - cron: '30 21 * * *' 
-  workflow_dispatch: # pozwala uruchamiać ręcznie
+    - cron: "0 9 * * *"
 
 jobs:
   run-monitor:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
-      
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v4
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: 3.11
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests pandas beautifulsoup4 lxml
+          pip install -r requirements.txt
 
       - name: Run monitor script
         run: python monitor_inpzu_vs_btc.py
-
